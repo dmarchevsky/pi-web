@@ -1,0 +1,105 @@
+name: Fork release
+
+# Fork-only (dmarchevsky/pi-web): after CI passes on a push to main, build the
+# package and attach its `npm pack` tarball to a GitHub Release.
+# Version: <upstream package.json version>-dm.<N>, set in the CI workspace only
+# (package.json in git keeps upstream's version, so syncs never conflict).
+# Tag: dm-v<version>, outside upstream's v* tags and their publish.yml.
+# See docs/fork-release.md.
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fork-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: >-
+      github.repository == 'dmarchevsky/pi-web' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.event == 'push'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SHA }}
+          fetch-depth: 0
+
+      - name: Compute the fork version
+        id: version
+        run: |
+          existing=$(git tag --points-at HEAD -l 'dm-v*' | head -n1)
+          if [ -n "$existing" ]; then
+            echo "::notice::$SHA is already released as $existing"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          base=$(node -p "require('./package.json').version")
+          last=$(git tag -l "dm-v${base}-dm.*" | sed -E 's/.*-dm\.([0-9]+)$/\1/' | grep -E '^[0-9]+$' | sort -n | tail -n1)
+          n=$(( ${last:-0} + 1 ))
+          version="${base}-dm.${n}"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=dm-v$version" >> "$GITHUB_OUTPUT"
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+          echo "Releasing $version from $SHA"
+
+      - if: steps.version.outputs.skip != 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.19.0
+          cache: npm
+
+      - if: steps.version.outputs.skip != 'true'
+        run: npm ci
+
+      - if: steps.version.outputs.skip != 'true'
+        name: Build and pack
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          npm version "$VERSION" --no-git-tag-version
+          npm run build
+          npm pack
+          cp "agegr-pi-web-$VERSION.tgz" pi-web.tgz
+
+      - if: steps.version.outputs.skip != 'true'
+        name: Create the GitHub Release
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          repo="$GITHUB_REPOSITORY"
+          cat > notes.md <<EOF
+          Fork build of upstream pi-web ${VERSION%-dm.*} at \`${SHA:0:7}\`.
+
+          Install:
+
+          \`\`\`bash
+          npm install -g https://github.com/$repo/releases/download/$TAG/agegr-pi-web-$VERSION.tgz
+          \`\`\`
+
+          Latest fork build: \`npm install -g https://github.com/$repo/releases/latest/download/pi-web.tgz\`
+
+          Do not run \`pi-web update\`: it installs upstream \`@agegr/pi-web@latest\` from npm.
+          EOF
+          gh release create "$TAG" "agegr-pi-web-$VERSION.tgz" pi-web.tgz \
+            --repo "$repo" \
+            --target "$SHA" \
+            --title "$TAG" \
+            --notes-file notes.md \
+            --generate-notes \
+            --latest
