@@ -7,17 +7,19 @@ This fork builds its own releases with `.github/workflows/fork-release.yml`. Ups
 1. Push to `main`, for example after merging a branch or syncing upstream.
 2. `CI` (`ci.yml`) runs lint, typecheck, unit tests and e2e.
 3. If CI passes, **Fork release** builds the package and creates a GitHub Release with:
-   - `agegr-pi-web-<version>.tgz`
+   - `agegr-pi-web-<upstream version>_dm.<N>.tgz` (GitHub would rename the `+` of the version in an asset name)
    - `pi-web.tgz` (the same file under a fixed name, so `releases/latest/download/pi-web.tgz` always points at the newest build)
 
 You can also start a release by hand from the Actions tab (Fork release → Run workflow). A commit that already has a `dm-v*` tag is skipped.
 
 ## Versions
 
-- Version: `<upstream version>-dm.<N>`, for example `0.15.0-dm.3`. N starts at 1 for each upstream version and goes up with every build.
-- Tag: `dm-v<version>`, for example `dm-v0.15.0-dm.3`.
-- `package.json` in git keeps upstream's version; CI sets the `-dm.N` version only while building. Never commit a fork version, or every upstream release will conflict.
-- The app shows the `-dm.N` version. Because it is a prerelease version, pi-web's check against npm never reports an upstream update.
+- Version: `<upstream version>+dm.<N>`, for example `0.17.0+dm.3`. N starts at 1 for each upstream version and goes up with every build; it continues past the older `<upstream version>-dm.<N>` tags.
+- `+dm.N` is semver build metadata: semver ranks the build equal to upstream's version, so a newer upstream release sorts above it, and it never ranks one fork build above another of the same upstream version. Release order comes from N and the release dates.
+- CI writes the version with `npm pkg set version=…`: `npm version` refuses build metadata as unchanged.
+- Tag: `dm-v<version>`, for example `dm-v0.17.0+dm.3`. In a download URL write the `+` as `%2B`.
+- `package.json` in git keeps upstream's version; CI sets the `+dm.N` version only while building. Never commit a fork version, or every upstream release will conflict.
+- The app shows the `+dm.N` version. pi-web's check against npm accepts only a plain `x.y.z` current version, so it never reports an upstream update.
 
 ## Install
 
